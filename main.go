@@ -2,26 +2,61 @@ package main
 
 import (
 	"log"
-	"strconv"
+	"os"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
-// The struct that all the data will follow
-type allUsers struct {
+// The struct that all the data will follow - now with GORM tags
+type User struct {
+	ID   uint   `gorm:"primaryKey" json:"id"`
 	Name string `json:"name"`
 	Age  int    `json:"age"`
 	Org  string `json:"org"`
 }
 
-// Starting data (Assuming they are data extracted from databases)
-var all_users = []allUsers{
-	{Name: "Byark", Age: 18, Org: "Jark"},
-	{Name: "Mikey", Age: 19, Org: "Jark"},
-	{Name: "Dylan", Age: 18, Org: "Jark"},
-}
+var db *gorm.DB
 
 func main() {
+	// Connect to PostgreSQL
+	var dsn string
+	if os.Getenv("DB_HOST") != "" {
+		// Running in Docker
+		dsn = "host=" + os.Getenv("DB_HOST") +
+			" user=" + os.Getenv("DB_USER") +
+			" password=" + os.Getenv("DB_PASSWORD") +
+			" dbname=" + os.Getenv("DB_NAME") +
+			" port=" + os.Getenv("DB_PORT") +
+			" sslmode=disable"
+	} else {
+		// Running locally
+		dsn = "host=localhost user=postgres password=mysecretpassword dbname=goapi_db port=5432 sslmode=disable"
+	}
+
+	var err error
+	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		log.Fatal("Failed to connect to database:", err)
+	}
+
+	// Auto-migrate the schema
+	db.AutoMigrate(&User{})
+
+	// Add initial data if table is empty
+	var count int64
+	db.Model(&User{}).Count(&count)
+	if count == 0 {
+		initialUsers := []User{
+			{Name: "Byark", Age: 18, Org: "Jark"},
+			{Name: "Mikey", Age: 19, Org: "Jark"},
+			{Name: "Dylan", Age: 18, Org: "Jark"},
+		}
+		db.Create(&initialUsers)
+		log.Println("Added initial users to database")
+	}
+
 	// All the methods possible and the functions linked with those methods
 	router := gin.Default()
 
@@ -36,7 +71,7 @@ func main() {
 	router.PATCH("/users/:id", updateUser)
 	router.DELETE("/users/:id", deleteUser)
 
-	err := router.Run(":8080")
+	err = router.Run(":8080")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -44,76 +79,81 @@ func main() {
 
 // Returns everything stored
 func getUsers(request *gin.Context) {
-	request.JSON(200, all_users)
+	var users []User
+	if err := db.Find(&users).Error; err != nil {
+		request.JSON(400, gin.H{"error": "Could not find users"})
+	}
+	request.JSON(200, users)
+
 }
 
-// Returns single user taking in id as parameter which is just the order of the items in the all users slice
+// Returns single user by ID from database
 func getUser(request *gin.Context) {
-	// Check if id can be taken in as a parameter, if cannot convert to int, error.
-	strid := request.Param("id")
-	id, err := strconv.Atoi(strid)
-	if err != nil {
-		request.JSON(400, gin.H{"error": "Invalid ID"})
-		return
-	}
-	//If id is out of range, error
-	if id < 0 || id >= len(all_users) {
+	var user User
+	id := request.Param("id")
+
+	if err := db.First(&user, id).Error; err != nil {
 		request.JSON(404, gin.H{"error": "User not found"})
 		return
 	}
 
-	request.JSON(200, all_users[id])
+	request.JSON(200, user)
 }
 
 // adding user to databases
 func addUser(request *gin.Context) {
 	// need to take given json from user and format so the code can read
-	var newUser allUsers
+	var newUser User
 
 	// if the inputted data can be formatted to the struct we made
 	if err := request.ShouldBindJSON(&newUser); err != nil {
 		request.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	// add new user to list
-	all_users = append(all_users, newUser)
+	// add new user to database
+	if err := db.Create(&newUser).Error; err != nil {
+		request.JSON(500, gin.H{"error": "Failed to create user"})
+		return
+	}
 	request.JSON(201, newUser)
 }
 
 func replaceUser(request *gin.Context) {
-	var userToUpdate allUsers
+	var userToUpdate User
+	id := request.Param("id")
 
-	strid := request.Param("id")
-	id, err := strconv.Atoi(strid)
-	if err != nil {
-		request.JSON(400, gin.H{"error": "Invalid ID"})
-		return
-	}
-	if id < 0 || id >= len(all_users) {
+	// Check if user exists
+	var existingUser User
+	if err := db.First(&existingUser, id).Error; err != nil {
 		request.JSON(404, gin.H{"error": "User not found"})
 		return
 	}
+
 	if err := request.ShouldBindJSON(&userToUpdate); err != nil {
 		request.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
 
-	// completely replacing, so assigning a new slice into an existing slice
-	all_users[id] = userToUpdate
-	request.JSON(200, all_users[id])
+	// Keep the same ID
+	userToUpdate.ID = existingUser.ID
+
+	// Save replaces all fields
+	if err := db.Save(&userToUpdate).Error; err != nil {
+		request.JSON(500, gin.H{"error": "Failed to update user"})
+		return
+	}
+
+	request.JSON(200, userToUpdate)
 }
 
 func updateUser(request *gin.Context) {
 	// interface instead of the struct, since we may have values that are missing
 	var updates map[string]interface{}
+	id := request.Param("id")
 
-	strid := request.Param("id")
-	id, err := strconv.Atoi(strid)
-	if err != nil {
-		request.JSON(400, gin.H{"error": "Invalid ID"})
-		return
-	}
-	if id < 0 || id >= len(all_users) {
+	// Check if user exists
+	var user User
+	if err := db.First(&user, id).Error; err != nil {
 		request.JSON(404, gin.H{"error": "User not found"})
 		return
 	}
@@ -123,32 +163,31 @@ func updateUser(request *gin.Context) {
 		return
 	}
 
-	// check interface if each item exists. if ok is false, it doesn't exist.
-	// we need to tell the code that it is of some type, since it comes from an interface, we don't know the type
-	if name, ok := updates["name"]; ok {
-		all_users[id].Name = name.(string)
+	// Update only provided fields
+	if err := db.Model(&user).Updates(updates).Error; err != nil {
+		request.JSON(500, gin.H{"error": "Failed to update user"})
+		return
 	}
-	if age, ok := updates["age"]; ok {
-		all_users[id].Age = int(age.(float64))
-	}
-	if org, ok := updates["org"]; ok {
-		all_users[id].Org = org.(string)
-	}
-	request.JSON(200, all_users[id])
-	log.Printf("%v", all_users[id])
+
+	// Fetch updated user
+	db.First(&user, id)
+	request.JSON(200, user)
+	log.Printf("Updated user: %v", user)
 }
 
 func deleteUser(request *gin.Context) {
-	id, err := strconv.Atoi(request.Param("id"))
-	if err != nil {
-		request.JSON(400, gin.H{"error": "Invalid ID"})
+	id := request.Param("id")
+
+	// Delete user from database
+	result := db.Delete(&User{}, id)
+	if result.Error != nil {
+		request.JSON(500, gin.H{"error": "Failed to delete user"})
 		return
 	}
-	if id < 0 || id >= len(all_users) {
+	if result.RowsAffected == 0 {
 		request.JSON(404, gin.H{"error": "User not found"})
 		return
 	}
-	// interesting logic. Appending everything but the user to delete.
-	all_users = append(all_users[:id], all_users[id+1:]...)
+
 	request.JSON(204, nil)
 }
