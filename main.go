@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/postgres"
@@ -11,10 +12,20 @@ import (
 
 // The struct that all the data will follow - now with GORM tags
 type User struct {
-	ID   uint   `gorm:"primaryKey" json:"id"`
-	Name string `json:"name"`
-	Age  int    `json:"age"`
-	Org  string `json:"org"`
+	ID     uint   `gorm:"primaryKey" json:"id"`
+	Name   string `json:"name"`
+	Age    int    `json:"age"`
+	Org    string `json:"org"`
+	TeamID *uint  `json:"team_id"`
+	Salary int    `json:"salary"`
+}
+
+type Team struct {
+	ID         uint   `gorm:"primaryKey" json:"id"`
+	Name       string `json:"name"`
+	Budget     int    `json:"budget"`
+	UsedBudget int    `json:"used_budget"`
+	Users      []User `json:"users,omitempty" gorm:"foreignKey:TeamID"`
 }
 
 var db *gorm.DB
@@ -42,20 +53,7 @@ func main() {
 	}
 
 	// Auto-migrate the schema
-	db.AutoMigrate(&User{})
-
-	// Add initial data if table is empty
-	var count int64
-	db.Model(&User{}).Count(&count)
-	if count == 0 {
-		initialUsers := []User{
-			{Name: "Byark", Age: 18, Org: "Jark"},
-			{Name: "Mikey", Age: 19, Org: "Jark"},
-			{Name: "Dylan", Age: 18, Org: "Jark"},
-		}
-		db.Create(&initialUsers)
-		log.Println("Added initial users to database")
-	}
+	db.AutoMigrate(&Team{}, &User{})
 
 	// All the methods possible and the functions linked with those methods
 	router := gin.Default()
@@ -70,6 +68,13 @@ func main() {
 	router.PUT("/users/:id", replaceUser)
 	router.PATCH("/users/:id", updateUser)
 	router.DELETE("/users/:id", deleteUser)
+
+	router.POST("/teams", adminOnly(), createTeam)
+	router.GET("/teams", getTeams)
+	router.DELETE("/teams/:team_id", adminOnly(), deleteTeam)
+
+	router.POST("/teams/:team_id/:user_id", addUserToTeam)
+	router.DELETE("/teams/:team_id/:user_id", removeUserFromTeam)
 
 	err = router.Run(":8080")
 	if err != nil {
@@ -110,6 +115,8 @@ func addUser(request *gin.Context) {
 		request.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	// this would ignore the salary calculation, so the user must be added through the addUserToTeam function
+	newUser.TeamID = nil
 	// add new user to database
 	if err := db.Create(&newUser).Error; err != nil {
 		request.JSON(500, gin.H{"error": "Failed to create user"})
@@ -190,4 +197,166 @@ func deleteUser(request *gin.Context) {
 	}
 
 	request.JSON(204, nil)
+}
+
+// team stuff
+func createTeam(request *gin.Context) {
+	var team Team
+
+	if err := request.ShouldBindJSON(&team); err != nil {
+		request.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	team.UsedBudget = 0
+
+	if err := db.Create(&team).Error; err != nil {
+		request.JSON(500, gin.H{"error": "Failed to create team"})
+		return
+	}
+
+	request.JSON(201, team)
+}
+
+func getTeams(request *gin.Context) {
+	var teams []Team
+	if err := db.Preload("Users").Find(&teams).Error; err != nil {
+		request.JSON(500, gin.H{"error": "Failed to fetch teams"})
+		return
+	}
+	request.JSON(200, teams)
+}
+
+func addUserToTeam(request *gin.Context) {
+	// which team? which user?
+	teamID := request.Param("team_id")
+	userID := request.Param("user_id")
+
+	// finding requested teams and users into go varibles, if they don't exist, error
+	var team Team
+	if err := db.First(&team, teamID).Error; err != nil {
+		request.JSON(404, gin.H{"error": "Team not found"})
+		return
+	}
+	var user User
+	if err := db.First(&user, userID).Error; err != nil {
+		request.JSON(404, gin.H{"error": "User not found"})
+		return
+	}
+
+	// check if user is not in a team yet
+	if user.TeamID != nil {
+		request.JSON(400, gin.H{"error": "User already belongs in team"})
+		return
+	}
+
+	// need to check if budget of team can affor user
+	newBudgetUsed := team.UsedBudget + user.Salary
+	if newBudgetUsed > team.Budget {
+		request.JSON(400, gin.H{
+			"error":        "Team cannot afford user",
+			"budget":       team.Budget,
+			"current_used": team.UsedBudget,
+			"user_salary":  user.Salary,
+			"would_need":   newBudgetUsed,
+		})
+		return
+	}
+
+	// convert params string into uint and assign it to user's teamID
+	teamIDUint, _ := strconv.Atoi(teamID)
+	teamIDValue := uint(teamIDUint)
+	user.TeamID = &teamIDValue
+
+	team.UsedBudget = newBudgetUsed
+
+	if err := db.Save(&user).Error; err != nil {
+		request.JSON(500, gin.H{"error": "Failed to update user"})
+		return
+	}
+	if err := db.Save(&team).Error; err != nil {
+		request.JSON(500, gin.H{"error": "Failed to update team budget"})
+		return
+	}
+
+	request.JSON(200, gin.H{
+		"message":               "User added to team successfully",
+		"user":                  user.Name,
+		"team":                  team.Name,
+		"team_budget_remaining": team.Budget - team.UsedBudget,
+	})
+}
+func removeUserFromTeam(request *gin.Context) {
+	teamID := request.Param("team_id")
+	userID := request.Param("user_id")
+
+	var team Team
+	if err := db.First(&team, teamID).Error; err != nil {
+		request.JSON(404, gin.H{"error": "Team not found"})
+		return
+	}
+
+	var user User
+	if err := db.First(&user, userID).Error; err != nil {
+		request.JSON(404, gin.H{"error": "User not found"})
+		return
+	}
+	// changing the teamid for said user to nil so there is no relationship
+	user.TeamID = nil
+	team.UsedBudget -= user.Salary
+
+	if err := db.Save(&user).Error; err != nil {
+		request.JSON(500, gin.H{"error": "Error saving to database"})
+		return
+	}
+	if err := db.Save(&team).Error; err != nil {
+		request.JSON(500, gin.H{"error": "Error saving to database"})
+		return
+	}
+
+	request.JSON(200, gin.H{"message": "User removed from team"})
+}
+
+func deleteTeam(request *gin.Context) {
+	teamID := request.Param("team_id")
+
+	var team Team
+
+	teamIDInt, _ := strconv.Atoi(teamID)
+	theteamID := uint(teamIDInt)
+
+	if err := db.First(&team, teamID).Error; err != nil {
+		request.JSON(404, gin.H{"error": "Team not found"})
+		return
+	}
+
+	// find all the users where the team id is the teamid in params and set them to null before team deletion
+	if err := db.Model(&User{}).Where("team_id = ?", theteamID).Update("team_id",
+		nil).Error; err != nil {
+		request.JSON(500, gin.H{"error": "Failed to remove users from team"})
+		return
+	}
+
+	if err := db.Delete(&team).Error; err != nil {
+		request.JSON(500, gin.H{"error": "Failed to delete team"})
+		return
+	}
+
+	request.JSON(200, gin.H{
+		"message": "Team deleted and users freed",
+		"team":    team.Name,
+	})
+
+}
+
+func adminOnly() gin.HandlerFunc {
+	return func(request *gin.Context) {
+		adminKey := request.GetHeader("admin-key")
+
+		if adminKey != "byakubyaku" {
+			request.JSON(403, gin.H{"error": "Admin access required"})
+			request.Abort()
+			return
+		}
+		request.Next()
+	}
 }
