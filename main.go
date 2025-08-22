@@ -4,6 +4,7 @@ import (
 	"goapi/handlers"
 	"goapi/models"
 	"goapi/repositories"
+	"goapi/usecases"
 	"log"
 	"os"
 
@@ -45,10 +46,13 @@ func main() {
 	userRepo := repositories.NewUserRepository(db)
 	teamRepo := repositories.NewTeamRepository(db)
 
+	teamUseCase := usecases.NewTeamUseCase(teamRepo, userRepo)
+
 	// Create handler with repositories
 	h := &handlers.Handler{
-		UserRepo: userRepo,
-		TeamRepo: teamRepo,
+		UserRepo:    userRepo,
+		TeamRepo:    teamRepo,
+		TeamUseCase: teamUseCase,
 	}
 
 	// All the methods possible and the functions linked with those methods
@@ -68,6 +72,7 @@ func main() {
 			users.PUT("/:id", h.ReplaceUser)
 			users.PATCH("/:id", h.UpdateUser)
 			users.DELETE("/:id", h.DeleteUser)
+			users.GET("/free", h.GetFreeAgents)
 		}
 		teams := api.Group("/teams")
 		{

@@ -15,6 +15,7 @@ type UserRepository interface {
 	Replace(user *models.User, id uint) (*models.User, error)
 	Update(updates map[string]interface{}, id uint) (*models.User, error)
 	Delete(id uint) error
+	FreeAgents() ([]models.User, error)
 }
 
 type userRepository struct {
@@ -75,4 +76,14 @@ func (r *userRepository) Update(updates map[string]interface{}, id uint) (*model
 
 func (r *userRepository) Delete(id uint) error {
 	return r.db.Delete(&models.User{}, id).Error
+}
+
+func (r *userRepository) FreeAgents() ([]models.User, error) {
+	var users []models.User
+	// need to use sql syntax to find null instead of "team_id = ?"", nil
+	if err := r.db.Where("team_id IS NULL").Find(&users).Error; err != nil {
+		return nil, err
+	}
+	return users, nil
+
 }

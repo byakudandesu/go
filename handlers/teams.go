@@ -25,9 +25,18 @@ func (h *Handler) CreateTeam(request *gin.Context) {
 	request.JSON(201, team)
 }
 
+//	func (h *Handler) GetTeams(request *gin.Context) {
+//		// Use the repository method that preloads users
+//		teams, err := h.TeamRepo.GetAllWithUsers()
+//		if err != nil {
+//			request.JSON(500, gin.H{"error": "Failed to fetch teams"})
+//			return
+//		}
+//		request.JSON(200, teams)
+//	}
 func (h *Handler) GetTeams(request *gin.Context) {
-	// Use the repository method that preloads users
-	teams, err := h.TeamRepo.GetAllWithUsers()
+	// Super simple now!
+	teams, err := h.TeamUseCase.GetAllTeamsIncludingFreeAgents()
 	if err != nil {
 		request.JSON(500, gin.H{"error": "Failed to fetch teams"})
 		return

@@ -22,14 +22,14 @@ func (h *Handler) GetUsers(request *gin.Context) {
 // Returns single user by ID from database
 func (h *Handler) GetUser(request *gin.Context) {
 	id := request.Param("id")
-	
+
 	// Convert string ID to uint
 	userID, err := strconv.ParseUint(id, 10, 32)
 	if err != nil {
 		request.JSON(400, gin.H{"error": "Invalid user ID"})
 		return
 	}
-	
+
 	user, err := h.UserRepo.GetByID(uint(userID))
 	if err != nil {
 		request.JSON(404, gin.H{"error": "User not found"})
@@ -62,7 +62,7 @@ func (h *Handler) AddUser(request *gin.Context) {
 func (h *Handler) ReplaceUser(request *gin.Context) {
 	var userToUpdate models.User
 	id := request.Param("id")
-	
+
 	// Convert string ID to uint
 	userID, err := strconv.ParseUint(id, 10, 32)
 	if err != nil {
@@ -99,7 +99,7 @@ func (h *Handler) UpdateUser(request *gin.Context) {
 	// interface instead of the struct, since we may have values that are missing
 	var updates map[string]interface{}
 	id := request.Param("id")
-	
+
 	// Convert string ID to uint
 	userID, err := strconv.ParseUint(id, 10, 32)
 	if err != nil {
@@ -132,7 +132,7 @@ func (h *Handler) UpdateUser(request *gin.Context) {
 
 func (h *Handler) DeleteUser(request *gin.Context) {
 	id := request.Param("id")
-	
+
 	// Convert string ID to uint
 	userID, err := strconv.ParseUint(id, 10, 32)
 	if err != nil {
@@ -152,4 +152,13 @@ func (h *Handler) DeleteUser(request *gin.Context) {
 	}
 
 	request.JSON(204, nil)
+}
+
+func (h *Handler) GetFreeAgents(request *gin.Context) {
+	freeAgents, err := h.UserRepo.FreeAgents()
+	if err != nil {
+		request.JSON(400, gin.H{"error": "Something went wrong"})
+		return
+	}
+	request.JSON(200, freeAgents)
 }
