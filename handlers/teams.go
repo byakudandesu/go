@@ -17,7 +17,7 @@ func (h *Handler) CreateTeam(request *gin.Context) {
 	}
 	team.UsedBudget = 0
 
-	if err := h.DB.Create(&team).Error; err != nil {
+	if err := h.TeamRepo.Create(&team); err != nil {
 		request.JSON(500, gin.H{"error": "Failed to create team"})
 		return
 	}
@@ -26,8 +26,9 @@ func (h *Handler) CreateTeam(request *gin.Context) {
 }
 
 func (h *Handler) GetTeams(request *gin.Context) {
-	var teams []models.Team
-	if err := h.DB.Preload("Users").Find(&teams).Error; err != nil {
+	// Use the repository method that preloads users
+	teams, err := h.TeamRepo.GetAllWithUsers()
+	if err != nil {
 		request.JSON(500, gin.H{"error": "Failed to fetch teams"})
 		return
 	}
@@ -39,14 +40,26 @@ func (h *Handler) AddUserToTeam(request *gin.Context) {
 	teamID := request.Param("team_id")
 	userID := request.Param("user_id")
 
-	// finding requested teams and users into go varibles, if they don't exist, error
-	var team models.Team
-	if err := h.DB.First(&team, teamID).Error; err != nil {
+	// Convert string IDs to uint
+	teamIDUint, err := strconv.ParseUint(teamID, 10, 32)
+	if err != nil {
+		request.JSON(400, gin.H{"error": "Invalid team ID"})
+		return
+	}
+	userIDUint, err := strconv.ParseUint(userID, 10, 32)
+	if err != nil {
+		request.JSON(400, gin.H{"error": "Invalid user ID"})
+		return
+	}
+
+	// finding requested teams and users using repositories
+	team, err := h.TeamRepo.GetByID(uint(teamIDUint))
+	if err != nil {
 		request.JSON(404, gin.H{"error": "Team not found"})
 		return
 	}
-	var user models.User
-	if err := h.DB.First(&user, userID).Error; err != nil {
+	user, err := h.UserRepo.GetByID(uint(userIDUint))
+	if err != nil {
 		request.JSON(404, gin.H{"error": "User not found"})
 		return
 	}
@@ -57,7 +70,7 @@ func (h *Handler) AddUserToTeam(request *gin.Context) {
 		return
 	}
 
-	// need to check if budget of team can affor user
+	// need to check if budget of team can afford user
 	newBudgetUsed := team.UsedBudget + user.Salary
 	if newBudgetUsed > team.Budget {
 		request.JSON(400, gin.H{
@@ -70,18 +83,20 @@ func (h *Handler) AddUserToTeam(request *gin.Context) {
 		return
 	}
 
-	// convert params string into uint and assign it to user's teamID
-	teamIDUint, _ := strconv.Atoi(teamID)
+	// assign team ID to user
 	teamIDValue := uint(teamIDUint)
 	user.TeamID = &teamIDValue
 
 	team.UsedBudget = newBudgetUsed
 
-	if err := h.DB.Save(&user).Error; err != nil {
+	// Update user and team using repositories
+	_, err = h.UserRepo.Replace(user, user.ID)
+	if err != nil {
 		request.JSON(500, gin.H{"error": "Failed to update user"})
 		return
 	}
-	if err := h.DB.Save(&team).Error; err != nil {
+	err = h.TeamRepo.Update(team)
+	if err != nil {
 		request.JSON(500, gin.H{"error": "Failed to update team budget"})
 		return
 	}
@@ -97,14 +112,27 @@ func (h *Handler) RemoveUserFromTeam(request *gin.Context) {
 	teamID := request.Param("team_id")
 	userID := request.Param("user_id")
 
-	var team models.Team
-	if err := h.DB.First(&team, teamID).Error; err != nil {
+	// Convert string IDs to uint
+	teamIDUint, err := strconv.ParseUint(teamID, 10, 32)
+	if err != nil {
+		request.JSON(400, gin.H{"error": "Invalid team ID"})
+		return
+	}
+	userIDUint, err := strconv.ParseUint(userID, 10, 32)
+	if err != nil {
+		request.JSON(400, gin.H{"error": "Invalid user ID"})
+		return
+	}
+
+	// Get team and user using repositories
+	team, err := h.TeamRepo.GetByID(uint(teamIDUint))
+	if err != nil {
 		request.JSON(404, gin.H{"error": "Team not found"})
 		return
 	}
 
-	var user models.User
-	if err := h.DB.First(&user, userID).Error; err != nil {
+	user, err := h.UserRepo.GetByID(uint(userIDUint))
+	if err != nil {
 		request.JSON(404, gin.H{"error": "User not found"})
 		return
 	}
@@ -112,11 +140,14 @@ func (h *Handler) RemoveUserFromTeam(request *gin.Context) {
 	user.TeamID = nil
 	team.UsedBudget -= user.Salary
 
-	if err := h.DB.Save(&user).Error; err != nil {
+	// Update user and team using repositories
+	_, err = h.UserRepo.Replace(user, user.ID)
+	if err != nil {
 		request.JSON(500, gin.H{"error": "Error saving to database"})
 		return
 	}
-	if err := h.DB.Save(&team).Error; err != nil {
+	err = h.TeamRepo.Update(team)
+	if err != nil {
 		request.JSON(500, gin.H{"error": "Error saving to database"})
 		return
 	}
@@ -127,24 +158,30 @@ func (h *Handler) RemoveUserFromTeam(request *gin.Context) {
 func (h *Handler) DeleteTeam(request *gin.Context) {
 	teamID := request.Param("team_id")
 
-	var team models.Team
+	// Convert string ID to uint
+	teamIDUint, err := strconv.ParseUint(teamID, 10, 32)
+	if err != nil {
+		request.JSON(400, gin.H{"error": "Invalid team ID"})
+		return
+	}
 
-	teamIDInt, _ := strconv.Atoi(teamID)
-	theteamID := uint(teamIDInt)
-
-	if err := h.DB.First(&team, teamID).Error; err != nil {
+	// Check if team exists
+	team, err := h.TeamRepo.GetByID(uint(teamIDUint))
+	if err != nil {
 		request.JSON(404, gin.H{"error": "Team not found"})
 		return
 	}
 
-	// find all the users where the team id is the teamid in params and set them to null before team deletion
-	if err := h.DB.Model(&models.User{}).Where("team_id = ?", theteamID).Update("team_id",
-		nil).Error; err != nil {
+	// Remove all users from the team before deletion
+	err = h.TeamRepo.RemoveAllUsersFromTeam(uint(teamIDUint))
+	if err != nil {
 		request.JSON(500, gin.H{"error": "Failed to remove users from team"})
 		return
 	}
 
-	if err := h.DB.Delete(&team).Error; err != nil {
+	// Delete the team
+	err = h.TeamRepo.Delete(uint(teamIDUint))
+	if err != nil {
 		request.JSON(500, gin.H{"error": "Failed to delete team"})
 		return
 	}

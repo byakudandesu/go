@@ -3,26 +3,35 @@ package handlers
 import (
 	"goapi/models"
 	"log"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // Returns everything stored
 func (h *Handler) GetUsers(request *gin.Context) {
-	var users []models.User
-	if err := h.DB.Find(&users).Error; err != nil {
+	users, err := h.UserRepo.GetAll()
+	if err != nil {
 		request.JSON(400, gin.H{"error": "Could not find users"})
+		return
 	}
 	request.JSON(200, users)
-
 }
 
 // Returns single user by ID from database
 func (h *Handler) GetUser(request *gin.Context) {
-	var user models.User
 	id := request.Param("id")
-
-	if err := h.DB.First(&user, id).Error; err != nil {
+	
+	// Convert string ID to uint
+	userID, err := strconv.ParseUint(id, 10, 32)
+	if err != nil {
+		request.JSON(400, gin.H{"error": "Invalid user ID"})
+		return
+	}
+	
+	user, err := h.UserRepo.GetByID(uint(userID))
+	if err != nil {
 		request.JSON(404, gin.H{"error": "User not found"})
 		return
 	}
@@ -42,8 +51,8 @@ func (h *Handler) AddUser(request *gin.Context) {
 	}
 	// this would ignore the salary calculation, so the user must be added through the addUserToTeam function
 	newUser.TeamID = nil
-	// add new user to database
-	if err := h.DB.Create(&newUser).Error; err != nil {
+	// add new user to database using repository
+	if err := h.UserRepo.Create(&newUser); err != nil {
 		request.JSON(500, gin.H{"error": "Failed to create user"})
 		return
 	}
@@ -53,10 +62,17 @@ func (h *Handler) AddUser(request *gin.Context) {
 func (h *Handler) ReplaceUser(request *gin.Context) {
 	var userToUpdate models.User
 	id := request.Param("id")
+	
+	// Convert string ID to uint
+	userID, err := strconv.ParseUint(id, 10, 32)
+	if err != nil {
+		request.JSON(400, gin.H{"error": "Invalid user ID"})
+		return
+	}
 
 	// Check if user exists
-	var existingUser models.User
-	if err := h.DB.First(&existingUser, id).Error; err != nil {
+	existingUser, err := h.UserRepo.GetByID(uint(userID))
+	if err != nil {
 		request.JSON(404, gin.H{"error": "User not found"})
 		return
 	}
@@ -69,23 +85,31 @@ func (h *Handler) ReplaceUser(request *gin.Context) {
 	// Keep the same ID
 	userToUpdate.ID = existingUser.ID
 
-	// Save replaces all fields
-	if err := h.DB.Save(&userToUpdate).Error; err != nil {
+	// Replace user using repository
+	updatedUser, err := h.UserRepo.Replace(&userToUpdate, uint(userID))
+	if err != nil {
 		request.JSON(500, gin.H{"error": "Failed to update user"})
 		return
 	}
 
-	request.JSON(200, userToUpdate)
+	request.JSON(200, updatedUser)
 }
 
 func (h *Handler) UpdateUser(request *gin.Context) {
 	// interface instead of the struct, since we may have values that are missing
 	var updates map[string]interface{}
 	id := request.Param("id")
+	
+	// Convert string ID to uint
+	userID, err := strconv.ParseUint(id, 10, 32)
+	if err != nil {
+		request.JSON(400, gin.H{"error": "Invalid user ID"})
+		return
+	}
 
 	// Check if user exists
-	var user models.User
-	if err := h.DB.First(&user, id).Error; err != nil {
+	_, err = h.UserRepo.GetByID(uint(userID))
+	if err != nil {
 		request.JSON(404, gin.H{"error": "User not found"})
 		return
 	}
@@ -95,29 +119,35 @@ func (h *Handler) UpdateUser(request *gin.Context) {
 		return
 	}
 
-	// Update only provided fields
-	if err := h.DB.Model(&user).Updates(updates).Error; err != nil {
+	// Update using repository
+	updatedUser, err := h.UserRepo.Update(updates, uint(userID))
+	if err != nil {
 		request.JSON(500, gin.H{"error": "Failed to update user"})
 		return
 	}
 
-	// Fetch updated user
-	h.DB.First(&user, id)
-	request.JSON(200, user)
-	log.Printf("Updated user: %v", user)
+	request.JSON(200, updatedUser)
+	log.Printf("Updated user: %v", updatedUser)
 }
 
 func (h *Handler) DeleteUser(request *gin.Context) {
 	id := request.Param("id")
-
-	// Delete user from database
-	result := h.DB.Delete(&models.User{}, id)
-	if result.Error != nil {
-		request.JSON(500, gin.H{"error": "Failed to delete user"})
+	
+	// Convert string ID to uint
+	userID, err := strconv.ParseUint(id, 10, 32)
+	if err != nil {
+		request.JSON(400, gin.H{"error": "Invalid user ID"})
 		return
 	}
-	if result.RowsAffected == 0 {
-		request.JSON(404, gin.H{"error": "User not found"})
+
+	// Delete user using repository
+	err = h.UserRepo.Delete(uint(userID))
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			request.JSON(404, gin.H{"error": "User not found"})
+		} else {
+			request.JSON(500, gin.H{"error": "Failed to delete user"})
+		}
 		return
 	}
 

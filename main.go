@@ -3,6 +3,7 @@ package main
 import (
 	"goapi/handlers"
 	"goapi/models"
+	"goapi/repositories"
 	"log"
 	"os"
 
@@ -40,7 +41,15 @@ func main() {
 	// Auto-migrate the schema
 	db.AutoMigrate(&models.Team{}, &models.User{})
 
-	h := &handlers.Handler{DB: db}
+	// Create repositories
+	userRepo := repositories.NewUserRepository(db)
+	teamRepo := repositories.NewTeamRepository(db)
+
+	// Create handler with repositories
+	h := &handlers.Handler{
+		UserRepo: userRepo,
+		TeamRepo: teamRepo,
+	}
 
 	// All the methods possible and the functions linked with those methods
 	router := gin.Default()
@@ -49,19 +58,26 @@ func main() {
 		request.JSON(200, gin.H{"test": "okokokok"})
 	})
 
-	router.GET("/users", h.GetUsers)
-	router.GET("/users/:id", h.GetUser)
-	router.POST("/users", h.AddUser)
-	router.PUT("/users/:id", h.ReplaceUser)
-	router.PATCH("/users/:id", h.UpdateUser)
-	router.DELETE("/users/:id", h.DeleteUser)
-
-	router.POST("/teams", handlers.AdminOnly(), h.CreateTeam)
-	router.GET("/teams", h.GetTeams)
-	router.DELETE("/teams/:team_id", handlers.AdminOnly(), h.DeleteTeam)
-
-	router.POST("/teams/:team_id/:user_id", h.AddUserToTeam)
-	router.DELETE("/teams/:team_id/:user_id", h.RemoveUserFromTeam)
+	api := router.Group("/api")
+	{
+		users := api.Group("/users")
+		{
+			users.GET("/", h.GetUsers)
+			users.GET("/:id", h.GetUser)
+			users.POST("/", h.AddUser)
+			users.PUT("/:id", h.ReplaceUser)
+			users.PATCH("/:id", h.UpdateUser)
+			users.DELETE("/:id", h.DeleteUser)
+		}
+		teams := api.Group("/teams")
+		{
+			teams.POST("/", handlers.AdminOnly(), h.CreateTeam)
+			teams.GET("/", h.GetTeams)
+			teams.DELETE("/:team_id", handlers.AdminOnly(), h.DeleteTeam)
+			teams.POST("/:team_id/:user_id", h.AddUserToTeam)
+			teams.DELETE("/:team_id/:user_id", h.RemoveUserFromTeam)
+		}
+	}
 
 	err = router.Run(":8080")
 	if err != nil {
